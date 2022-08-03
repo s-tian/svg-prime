@@ -1,3 +1,7 @@
+# Implementation of "High Fidelity Video Prediction with Large Stochastic Recurrent Neural Networks"
+This is a quick and unverified implementation of the paper [High Fidelity Video Prediction with Large Stochastic Recurrent Neural Networks](https://arxiv.org/pdf/1911.01655.pdf) by Ruben Villegas et al.
+It is built off of the code base for SVG-LP, described below.
+
 # Stochastic Video Generation with a Learned Prior
 This is code for the paper [Stochastic Video Generation with a Learned Prior](https://arxiv.org/abs/1802.07687) by Emily Denton and Rob Fergus. See the [project page](https://sites.google.com/view/svglp/) for details and generated video sequences.
 
