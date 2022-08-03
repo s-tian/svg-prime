@@ -20,6 +20,7 @@ parser.add_argument('--model_dir', default='', help='base directory to save logs
 parser.add_argument('--name', default='', help='identifier for directory')
 parser.add_argument('--data_root', default='data', help='root directory for data')
 parser.add_argument('--optimizer', default='adam', help='optimizer to train with')
+parser.add_argument('--loss_fn', default='l1', help='loss function to use (mse | l1)')
 parser.add_argument('--niter', type=int, default=300, help='number of epochs to train for')
 parser.add_argument('--seed', default=1, type=int, help='manual seed')
 parser.add_argument('--epoch_size', type=int, default=600, help='epoch size')
@@ -121,11 +122,16 @@ encoder_optimizer = opt.optimizer(encoder.parameters(), lr=opt.lr, betas=(opt.be
 decoder_optimizer = opt.optimizer(decoder.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
 
 # --------- loss functions ------------------------------------
-mse_criterion = nn.MSELoss()
+if opt.loss_fn == "mse":
+    reconstruction_criterion = nn.MSELoss()
+elif opt.loss_fn == "l1":
+    reconstruction_criterion = nn.L1Loss()
+else:
+    raise NotImplementedError("Unknown loss function: %s" % opt.loss_fn)
+
+
 def kl_criterion(mu1, logvar1, mu2, logvar2):
-    # KL( N(mu_1, sigma2_1) || N(mu_2, sigma2_2)) = 
-    #   log( sqrt(
-    # 
+
     sigma1 = logvar1.mul(0.5).exp() 
     sigma2 = logvar2.mul(0.5).exp() 
     kld = torch.log(sigma2/sigma1) + (torch.exp(logvar1) + (mu1 - mu2)**2)/(2*torch.exp(logvar2)) - 1/2
@@ -137,7 +143,7 @@ posterior.cuda()
 prior.cuda()
 encoder.cuda()
 decoder.cuda()
-mse_criterion.cuda()
+reconstruction_criterion.cuda()
 
 # --------- load a dataset ------------------------------------
 train_data, test_data = utils.load_dataset(opt)
@@ -310,7 +316,7 @@ def train(x):
         _, mu_p, logvar_p = prior(h)
         h_pred = frame_predictor(torch.cat([h, z_t], 1))
         x_pred = decoder([h_pred, skip])
-        mse += mse_criterion(x_pred, x[i])
+        mse += reconstruction_criterion(x_pred, x[i])
         kld += kl_criterion(mu, logvar, mu_p, logvar_p)
 
     loss = mse + kld*opt.beta
