@@ -4,7 +4,7 @@ from .convlstm_cell import ConvLSTMCell
 from torch.autograd import Variable
 
 class ConvLSTM(nn.Module):
-    def __init__(self, input_size, output_size, hidden_size, image_size, n_layers, batch_size):
+    def __init__(self, input_size, output_size, hidden_size, image_size, n_layers, batch_size, expand=1):
         super(ConvLSTM, self).__init__()
         self.input_size = input_size
         self.output_size = output_size
@@ -12,10 +12,10 @@ class ConvLSTM(nn.Module):
         self.batch_size = batch_size
         self.n_layers = n_layers
         self.image_size = image_size
-        self.embed = nn.Conv2d(input_size, hidden_size, 3, 1, 1) # Initial embedding conv layer
-        self.lstm = nn.ModuleList([ConvLSTMCell(hidden_size, hidden_size, (3, 3), True) for i in range(self.n_layers)])
+        self.embed = nn.Conv2d(input_size, hidden_size*expand, 3, 1, 1) # Initial embedding conv layer
+        self.lstm = nn.ModuleList([ConvLSTMCell(hidden_size*expand, hidden_size*expand, (3, 3), True) for i in range(self.n_layers)])
         self.output = nn.Sequential(
-                nn.Conv2d(hidden_size, output_size, 3, 1, 1),
+                nn.Conv2d(hidden_size*expand, output_size, 3, 1, 1),
                 #nn.BatchNorm1d(output_size),
                 nn.Tanh())
         self.hidden = self.init_hidden()
@@ -36,7 +36,7 @@ class ConvLSTM(nn.Module):
 
 
 class ConvGaussianLSTM(nn.Module):
-    def __init__(self, input_size, output_size, hidden_size, image_size, n_layers, batch_size):
+    def __init__(self, input_size, output_size, hidden_size, image_size, n_layers, batch_size, expand=1):
         super(ConvGaussianLSTM, self).__init__()
         self.input_size = input_size
         self.output_size = output_size
@@ -44,10 +44,10 @@ class ConvGaussianLSTM(nn.Module):
         self.image_size = image_size
         self.n_layers = n_layers
         self.batch_size = batch_size
-        self.embed = nn.Conv2d(input_size, hidden_size, 3, 1, 1)
-        self.lstm = nn.ModuleList([ConvLSTMCell(hidden_size, hidden_size, (3, 3), True) for _ in range(self.n_layers)])
-        self.mu_net = nn.Conv2d(hidden_size, output_size, 3, 1, 1)
-        self.logvar_net = nn.Conv2d(hidden_size, output_size, 3, 1, 1)
+        self.embed = nn.Conv2d(input_size, hidden_size*expand, 3, 1, 1)
+        self.lstm = nn.ModuleList([ConvLSTMCell(hidden_size*expand, hidden_size*expand, (3, 3), True) for _ in range(self.n_layers)])
+        self.mu_net = nn.Conv2d(hidden_size*expand, output_size, 3, 1, 1)
+        self.logvar_net = nn.Conv2d(hidden_size*expand, output_size, 3, 1, 1)
         self.hidden = self.init_hidden()
 
     def init_hidden(self):

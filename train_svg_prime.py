@@ -29,7 +29,9 @@ parser.add_argument('--dataset', default='smmnist', help='dataset to train with'
 parser.add_argument('--n_past', type=int, default=5, help='number of frames to condition on')
 parser.add_argument('--n_future', type=int, default=10, help='number of frames to predict during training')
 parser.add_argument('--n_eval', type=int, default=30, help='number of frames to predict during eval')
-parser.add_argument('--rnn_size', type=int, default=256, help='dimensionality of hidden layer')
+parser.add_argument('--rnn_size', type=int, default=512, help='dimensionality of hidden layer')
+parser.add_argument('--M', type=int, default=1, help='scaling factor for LSTMs')
+parser.add_argument('--K', type=int, default=1, help='scaling factor for encoder/decoder')
 parser.add_argument('--prior_rnn_layers', type=int, default=1, help='number of layers')
 parser.add_argument('--posterior_rnn_layers', type=int, default=1, help='number of layers')
 parser.add_argument('--predictor_rnn_layers', type=int, default=2, help='number of layers')
@@ -92,8 +94,8 @@ if opt.model_dir != '':
     decoder = saved_model['decoder']
     encoder = saved_model['encoder']
 else:
-    encoder = model.encoder(opt.g_dim, opt.channels)
-    decoder = model.decoder(opt.g_dim, opt.channels)
+    encoder = model.encoder(opt.g_dim, opt.channels, expand=opt.K)
+    decoder = model.decoder(opt.g_dim, opt.channels, expand=opt.K)
     encoder.apply(utils.init_weights)
     decoder.apply(utils.init_weights)
 
@@ -104,9 +106,9 @@ if opt.model_dir != '':
     posterior = saved_model['posterior']
     prior = saved_model['prior']
 else:
-    frame_predictor = lstm_models.ConvLSTM(opt.g_dim+opt.z_dim+opt.a_dim, opt.g_dim, opt.rnn_size, (8, 8), opt.predictor_rnn_layers, opt.batch_size)
-    posterior = lstm_models.ConvGaussianLSTM(opt.g_dim, opt.z_dim, opt.rnn_size, (8, 8), opt.posterior_rnn_layers, opt.batch_size)
-    prior = lstm_models.ConvGaussianLSTM(opt.g_dim, opt.z_dim, opt.rnn_size, (8, 8), opt.prior_rnn_layers, opt.batch_size)
+    frame_predictor = lstm_models.ConvLSTM(opt.g_dim+opt.z_dim+opt.a_dim, opt.g_dim, opt.rnn_size, (8, 8), opt.predictor_rnn_layers, opt.batch_size, expand=opt.M)
+    posterior = lstm_models.ConvGaussianLSTM(opt.g_dim, opt.z_dim, opt.rnn_size, (8, 8), opt.posterior_rnn_layers, opt.batch_size, expand=opt.M)
+    prior = lstm_models.ConvGaussianLSTM(opt.g_dim, opt.z_dim, opt.rnn_size, (8, 8), opt.prior_rnn_layers, opt.batch_size, expand=opt.M)
     frame_predictor.apply(utils.init_weights)
     posterior.apply(utils.init_weights)
     prior.apply(utils.init_weights)
