@@ -4,14 +4,15 @@ import socket
 import argparse
 import os
 import numpy as np
-from sklearn.manifold import TSNE
 import scipy.misc
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import functools
-from skimage.measure import compare_psnr as psnr_metric
-from skimage.measure import compare_ssim as ssim_metric
+# from skimage.measure import compare_psnr as psnr_metric
+# from skimage.measure import compare_ssim as ssim_metric
+from skimage.metrics import peak_signal_noise_ratio as psnr_metric
+from skimage.metrics import structural_similarity as ssim_metric
 from scipy import signal
 from scipy import ndimage
 from PIL import Image, ImageDraw
@@ -148,9 +149,9 @@ def make_image(tensor):
     if tensor.size(0) == 1:
         tensor = tensor.expand(3, tensor.size(1), tensor.size(2))
     # pdb.set_trace()
-    return scipy.misc.toimage(tensor.numpy(),
-                              high=255*tensor.max(),
-                              channel_axis=0)
+    from PIL import Image
+    tensor = (tensor.permute(1, 2, 0).detach().cpu().numpy() * 255).astype(np.uint8)
+    return Image.fromarray(tensor)
 
 def draw_text_tensor(tensor, text):
     np_x = tensor.transpose(0, 1).transpose(1, 2).data.cpu().numpy()
@@ -291,6 +292,8 @@ def finn_ssim(img1, img2, cs_map=False):
 
 def init_weights(m):
     classname = m.__class__.__name__
+    if classname == 'ConvLSTMCell' or classname == 'ConvLSTM' or classname == 'ConvGaussianLSTM':
+        return
     if classname.find('Conv') != -1 or classname.find('Linear') != -1:
         m.weight.data.normal_(0.0, 0.02)
         m.bias.data.fill_(0)
