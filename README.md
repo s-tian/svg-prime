@@ -3,7 +3,7 @@ This is a quick and unverified implementation of the paper [High Fidelity Video 
 It is built off of the code base for SVG-LP, described below.
 
 Notes:
-- Use a batch size of at least 32 when training SVG'. This yields much improved performance compared to batch size of 16, but not extensively tested.
+- The default learning rate of SVG-LP is very high (2e-3). For SVG', training performance is much better with a lower learning rate (tried 3e-4). 
 
 # Stochastic Video Generation with a Learned Prior
 This is code for the paper [Stochastic Video Generation with a Learned Prior](https://arxiv.org/abs/1802.07687) by Emily Denton and Rob Fergus. See the [project page](https://sites.google.com/view/svglp/) for details and generated video sequences.
