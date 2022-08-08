@@ -40,7 +40,8 @@ parser.add_argument('--model', default='dcgan', help='model type (dcgan | vgg)')
 parser.add_argument('--data_threads', type=int, default=5, help='number of data loading threads')
 parser.add_argument('--num_digits', type=int, default=2, help='number of digits for moving mnist')
 parser.add_argument('--last_frame_skip', action='store_true', help='if true, skip connections go between frame t and frame t+t rather than last ground truth frame')
-
+parser.add_argument('--wandb_project_name', type=str, default="svg-prime", help='project name to use when logging with wandb')
+parser.add_argument('--disable_wandb', action='store_true', help='do not log to wandb')
 
 
 opt = parser.parse_args()
@@ -193,10 +194,10 @@ def plot(x, epoch):
                 h, skip = h
             else:
                 h, _ = h
-            h = h.detach()
+            h = h
             if i < opt.n_past:
                 h_target = encoder(x[i])
-                h_target = h_target[0].detach()
+                h_target = h_target[0]
                 z_t, _, _ = posterior(h_target)
                 prior(h)
                 frame_predictor(torch.cat([h, z_t], 1))
@@ -204,8 +205,8 @@ def plot(x, epoch):
                 gen_seq[s].append(x_in)
             else:
                 z_t, _, _ = prior(h)
-                h = frame_predictor(torch.cat([h, z_t], 1)).detach()
-                x_in = decoder([h, skip]).detach()
+                h = frame_predictor(torch.cat([h, z_t], 1))
+                x_in = decoder([h, skip])
                 gen_seq[s].append(x_in)
 
     to_plot = []
@@ -268,15 +269,15 @@ def plot_rec(x, epoch):
         else:
             h, _ = h
         h_target, _ = h_target
-        h = h.detach()
-        h_target = h_target.detach()
+        h = h
+        h_target = h_target
         z_t, _, _= posterior(h_target)
         if i < opt.n_past:
             frame_predictor(torch.cat([h, z_t], 1)) 
             gen_seq.append(x[i])
         else:
             h_pred = frame_predictor(torch.cat([h, z_t], 1))
-            x_pred = decoder([h_pred, skip]).detach()
+            x_pred = decoder([h_pred, skip])
             gen_seq.append(x_pred)
    
     to_plot = []
@@ -331,6 +332,16 @@ def train(x):
 
     return mse.data.cpu().numpy()/(opt.n_past+opt.n_future), kld.data.cpu().numpy()/(opt.n_future+opt.n_past)
 
+# Initialize wandb
+if not opt.disable_wandb:
+    import wandb
+    wandb.init(
+        project=opt.wandb_project_name,
+        reinit=True,
+        mode="online",
+        settings=wandb.Settings(start_method="fork"),
+    )
+
 # --------- training loop ------------------------------------
 for epoch in range(opt.niter):
     frame_predictor.train()
@@ -350,6 +361,11 @@ for epoch in range(opt.niter):
         epoch_mse += mse
         epoch_kld += kld
 
+        if not opt.disable_wandb:
+            wandb.log({
+                "train/mse": mse,
+                "train/kld": kld,
+            })
 
     progress.finish()
     utils.clear_progressbar()
@@ -358,14 +374,15 @@ for epoch in range(opt.niter):
 
     # plot some stuff
     frame_predictor.eval()
-    #encoder.eval()
-    #decoder.eval()
+    encoder.eval()
+    decoder.eval()
     posterior.eval()
     prior.eval()
     
     x = next(testing_batch_generator)
-    plot(x, epoch)
-    plot_rec(x, epoch)
+    with torch.no_grad():
+        plot(x, epoch)
+        plot_rec(x, epoch)
 
     # save the model
     torch.save({

@@ -14,7 +14,6 @@ class VGG_layer(nn.Module):
     def forward(self, input):
         return self.main(input)
 
-
 class encoder(nn.Module):
     def __init__(self, dim, nc=1, nout=128, expand=1):
         super(encoder, self).__init__()

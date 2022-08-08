@@ -12,7 +12,7 @@ import progressbar
 import numpy as np
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--lr', default=0.002, type=float, help='learning rate')
+parser.add_argument('--lr', default=0.0003, type=float, help='learning rate')
 parser.add_argument('--beta1', default=0.9, type=float, help='momentum term for adam')
 parser.add_argument('--batch_size', default=100, type=int, help='batch size')
 parser.add_argument('--log_dir', default='logs/lp', help='base directory to save logs')
@@ -20,7 +20,7 @@ parser.add_argument('--model_dir', default='', help='base directory to save logs
 parser.add_argument('--name', default='', help='identifier for directory')
 parser.add_argument('--data_root', default='data', help='root directory for data')
 parser.add_argument('--optimizer', default='adam', help='optimizer to train with')
-parser.add_argument('--loss_fn', default='l1', help='loss function to use (mse | l1)')
+parser.add_argument('--loss_fn', default='mse', help='loss function to use (mse | l1)')
 parser.add_argument('--niter', type=int, default=300, help='number of epochs to train for')
 parser.add_argument('--seed', default=1, type=int, help='manual seed')
 parser.add_argument('--epoch_size', type=int, default=600, help='epoch size')
@@ -44,6 +44,8 @@ parser.add_argument('--model', default='shallow_vgg', help='model type (dcgan | 
 parser.add_argument('--data_threads', type=int, default=5, help='number of data loading threads')
 parser.add_argument('--num_digits', type=int, default=2, help='number of digits for moving mnist')
 parser.add_argument('--last_frame_skip', action='store_true', help='if true, skip connections go between frame t and frame t+t rather than last ground truth frame')
+parser.add_argument('--wandb_project_name', type=str, default="svg-prime", help='project name to use when logging with wandb')
+parser.add_argument('--disable_wandb', action='store_true', help='do not log to wandb')
 
 
 
@@ -321,7 +323,6 @@ def train(x):
 
     loss = mse + kld*opt.beta
     loss.backward()
-
     frame_predictor_optimizer.step()
     posterior_optimizer.step()
     prior_optimizer.step()
@@ -330,6 +331,17 @@ def train(x):
 
 
     return mse.data.cpu().numpy()/(opt.n_past+opt.n_future), kld.data.cpu().numpy()/(opt.n_future+opt.n_past)
+
+
+# Initialize wandb
+if not opt.disable_wandb:
+    import wandb
+    wandb.init(
+        project=opt.wandb_project_name,
+        reinit=True,
+        mode="online",
+        settings=wandb.Settings(start_method="fork"),
+    )
 
 # --------- training loop ------------------------------------
 for epoch in range(opt.niter):
@@ -349,7 +361,11 @@ for epoch in range(opt.niter):
         mse, kld = train(x)
         epoch_mse += mse
         epoch_kld += kld
-
+        if not opt.disable_wandb:
+            wandb.log({
+                "train/mse": mse,
+                "train/kld": kld,
+            })
 
     progress.finish()
     utils.clear_progressbar()
