@@ -133,8 +133,7 @@ else:
 
 
 def kl_criterion(mu1, logvar1, mu2, logvar2):
-
-    sigma1 = logvar1.mul(0.5).exp() 
+    sigma1 = logvar1.mul(0.5).exp()
     sigma2 = logvar2.mul(0.5).exp() 
     kld = torch.log(sigma2/sigma1) + (torch.exp(logvar1) + (mu1 - mu2)**2)/(2*torch.exp(logvar2)) - 1/2
     return kld.sum() / opt.batch_size
@@ -178,7 +177,7 @@ def get_testing_batch():
 testing_batch_generator = get_testing_batch()
 
 # --------- plotting funtions ------------------------------------
-def plot(x, epoch):
+def plot(x, epoch, actions=None):
     nsample = 20 
     gen_seq = [[] for i in range(nsample)]
     gt_seq = [x[i] for i in range(len(x))]
@@ -201,12 +200,18 @@ def plot(x, epoch):
                 h_target = h_target[0]
                 z_t, _, _ = posterior(h_target)
                 prior(h)
-                frame_predictor(torch.cat([h, z_t], 1))
+                if actions:
+                    frame_predictor(torch.cat([h, actions[i-1], z_t], 1))
+                else:
+                    frame_predictor(torch.cat([h, z_t], 1))
                 x_in = x[i]
                 gen_seq[s].append(x_in)
             else:
                 z_t, _, _ = prior(h)
-                h = frame_predictor(torch.cat([h, z_t], 1))
+                if actions:
+                    h = frame_predictor(torch.cat([h, actions[i - 1], z_t], 1))
+                else:
+                    h = frame_predictor(torch.cat([h, z_t], 1))
                 x_in = decoder([h, skip])
                 gen_seq[s].append(x_in)
 
@@ -256,7 +261,7 @@ def plot(x, epoch):
     utils.save_gif(fname, gifs)
 
 
-def plot_rec(x, epoch):
+def plot_rec(x, epoch, actions=None):
     frame_predictor.hidden = frame_predictor.init_hidden()
     posterior.hidden = posterior.init_hidden()
     gen_seq = []
@@ -274,10 +279,16 @@ def plot_rec(x, epoch):
         h_target = h_target
         z_t, _, _= posterior(h_target)
         if i < opt.n_past:
-            frame_predictor(torch.cat([h, z_t], 1)) 
+            if actions:
+                frame_predictor(torch.cat([h, actions[i - 1], z_t], 1))
+            else:
+                frame_predictor(torch.cat([h, z_t], 1))
             gen_seq.append(x[i])
         else:
-            h_pred = frame_predictor(torch.cat([h, z_t], 1))
+            if actions:
+                h_pred = frame_predictor(torch.cat([h, actions[i - 1], z_t], 1))
+            else:
+                h_pred = frame_predictor(torch.cat([h, z_t], 1))
             x_pred = decoder([h_pred, skip])
             gen_seq.append(x_pred)
    
@@ -293,7 +304,7 @@ def plot_rec(x, epoch):
 
 
 # --------- training funtions ------------------------------------
-def train(x):
+def train(x, actions=None):
     frame_predictor.zero_grad()
     posterior.zero_grad()
     prior.zero_grad()
@@ -310,13 +321,16 @@ def train(x):
     for i in range(1, opt.n_past+opt.n_future):
         h = encoder(x[i-1])
         h_target = encoder(x[i])[0]
-        if opt.last_frame_skip or i < opt.n_past:	
+        if opt.last_frame_skip or i < opt.n_past:
             h, skip = h
         else:
             h = h[0]
         z_t, mu, logvar = posterior(h_target)
         _, mu_p, logvar_p = prior(h)
-        h_pred = frame_predictor(torch.cat([h, z_t], 1))
+        if actions:
+            h_pred = frame_predictor(torch.cat([h, actions[i-1], z_t], 1))
+        else:
+            h_pred = frame_predictor(torch.cat([h, z_t], 1))
         x_pred = decoder([h_pred, skip])
         mse += reconstruction_criterion(x_pred, x[i])
         kld += kl_criterion(mu, logvar, mu_p, logvar_p)
@@ -328,7 +342,6 @@ def train(x):
     prior_optimizer.step()
     encoder_optimizer.step()
     decoder_optimizer.step()
-
 
     return mse.data.cpu().numpy()/(opt.n_past+opt.n_future), kld.data.cpu().numpy()/(opt.n_future+opt.n_past)
 
@@ -355,10 +368,14 @@ for epoch in range(opt.niter):
     progress = progressbar.ProgressBar(max_value=opt.epoch_size).start()
     for i in range(opt.epoch_size):
         progress.update(i+1)
-        x = next(training_batch_generator)
+        if opt.a_dim == 0:
+            x = next(training_batch_generator)
+            actions = None
+        else:
+            x, actions = next(training_batch_generator)
 
         # train frame_predictor 
-        mse, kld = train(x)
+        mse, kld = train(x, actions)
         epoch_mse += mse
         epoch_kld += kld
         if not opt.disable_wandb:
