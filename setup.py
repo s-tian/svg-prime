@@ -1,8 +1,8 @@
 from setuptools import setup
 
 setup(
-    name='svg-prime',
+    name='svg_prime',
     version='0.1',
-    packages=[''],
+    packages=['svg_prime'],
     license='MIT License',
 )
