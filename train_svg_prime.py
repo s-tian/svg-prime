@@ -27,6 +27,9 @@ parser.add_argument('--epoch_size', type=int, default=600, help='epoch size')
 parser.add_argument('--image_width', type=int, default=64, help='the height / width of the input image to network')
 parser.add_argument('--channels', default=1, type=int)
 parser.add_argument('--dataset', default='smmnist', help='dataset to train with')
+parser.add_argument('--dataset_files', nargs='+', required=False, help='dataset files for perceptual_metrics dataset')
+parser.add_argument('--camera_name', type=str, default="agentview_shift_2", help='camera name for robomimic')
+parser.add_argument('--cache_mode', type=str, default="low_dim", help='perceptual_metrics dataset cache mode')
 parser.add_argument('--n_past', type=int, default=5, help='number of frames to condition on')
 parser.add_argument('--n_future', type=int, default=10, help='number of frames to predict during training')
 parser.add_argument('--n_eval', type=int, default=30, help='number of frames to predict during eval')
@@ -41,6 +44,7 @@ parser.add_argument('--g_dim', type=int, default=128, help='dimensionality of en
 parser.add_argument('--a_dim', type=int, default=4, help='dimensionality of action vector')
 parser.add_argument('--beta', type=float, default=0.0001, help='weighting on KL to prior')
 parser.add_argument('--model', default='shallow_vgg', help='model type (dcgan | vgg | shallow_vgg)')
+parser.add_argument('--run_name', default='default_run', help='run name identifier')
 parser.add_argument('--data_threads', type=int, default=5, help='number of data loading threads')
 parser.add_argument('--num_digits', type=int, default=2, help='number of digits for moving mnist')
 parser.add_argument('--last_frame_skip', action='store_true', help='if true, skip connections go between frame t and frame t+t rather than last ground truth frame')
@@ -60,7 +64,7 @@ if opt.model_dir != '':
     opt.model_dir = model_dir
     opt.log_dir = '%s/continued' % opt.log_dir
 else:
-    name = 'model=%s%dx%d-rnn_size=%d-predictor-posterior-prior-rnn_layers=%d-%d-%d-n_past=%d-n_future=%d-lr=%.4f-g_dim=%d-z_dim=%d-last_frame_skip=%s-beta=%.7f%s' % (opt.model, opt.image_width, opt.image_width, opt.rnn_size, opt.predictor_rnn_layers, opt.posterior_rnn_layers, opt.prior_rnn_layers, opt.n_past, opt.n_future, opt.lr, opt.g_dim, opt.z_dim, opt.last_frame_skip, opt.beta, opt.name)
+    name = 'run_name=%s-model=%s%dx%d-rnn_size=%d-predictor-posterior-prior-rnn_layers=%d-%d-%d-n_past=%d-n_future=%d-lr=%.4f-g_dim=%d-z_dim=%d-last_frame_skip=%s-beta=%.7f%s' % (opt.run_name, opt.model, opt.image_width, opt.image_width, opt.rnn_size, opt.predictor_rnn_layers, opt.posterior_rnn_layers, opt.prior_rnn_layers, opt.n_past, opt.n_future, opt.lr, opt.g_dim, opt.z_dim, opt.last_frame_skip, opt.beta, opt.name)
     if opt.dataset == 'smmnist':
         opt.log_dir = '%s/%s-%d/%s' % (opt.log_dir, opt.dataset, opt.num_digits, name)
     else:
@@ -147,20 +151,60 @@ decoder.cuda()
 reconstruction_criterion.cuda()
 
 # --------- load a dataset ------------------------------------
-train_data, test_data = utils.load_dataset(opt)
+def wrap_prep_data(fn):
+    def prep(x):
+        data_dict = fn(x)
+        video = data_dict["video"].permute(1, 0, 2, 3, 4).cuda()
+        actions = data_dict["actions"].permute(1, 0, 2).cuda()
+        return video, actions
+    return prep
 
-train_loader = DataLoader(train_data,
-                          num_workers=opt.data_threads,
-                          batch_size=opt.batch_size,
-                          shuffle=True,
-                          drop_last=True,
-                          pin_memory=True)
-test_loader = DataLoader(test_data,
-                         num_workers=opt.data_threads,
-                         batch_size=opt.batch_size,
-                         shuffle=True,
-                         drop_last=True,
-                         pin_memory=True)
+if opt.dataset == "perceptual_metrics":
+    from fitvid.data.robomimic_data import load_dataset_robomimic_torch
+    train_loader, train_prep = load_dataset_robomimic_torch(
+        dataset_path=opt.dataset_files,
+        batch_size=opt.batch_size,
+        video_len=opt.n_past + opt.n_future,
+        video_dims=(64, 64),
+        phase="train",
+        depth=False,
+        normal=False,
+        view=opt.camera_name,
+        cache_mode=opt.cache_mode,
+        seg=False,
+    )
+    test_loader, test_prep = load_dataset_robomimic_torch(
+        dataset_path=opt.dataset_files,
+        batch_size=opt.batch_size,
+        video_len=opt.n_past + opt.n_future,
+        video_dims=(64, 64),
+        phase="valid",
+        depth=False,
+        normal=False,
+        view=opt.camera_name,
+        cache_mode=opt.cache_mode,
+        seg=False,
+    )
+    train_prep, test_prep = wrap_prep_data(train_prep), wrap_prep_data(test_prep)
+
+else:
+    train_data, test_data = utils.load_dataset(opt)
+
+    train_loader = DataLoader(train_data,
+                              num_workers=opt.data_threads,
+                              batch_size=opt.batch_size,
+                              shuffle=True,
+                              drop_last=True,
+                              pin_memory=True)
+    test_loader = DataLoader(test_data,
+                             num_workers=opt.data_threads,
+                             batch_size=opt.batch_size,
+                             shuffle=True,
+                             drop_last=True,
+                             pin_memory=True)
+
+    train_prep = test_prep = lambda x: x
+
 
 def get_training_batch():
     while True:
@@ -194,22 +238,23 @@ def plot(x, epoch, actions=None):
                 h, skip = h
             else:
                 h, _ = h
-            h = h
             if i < opt.n_past:
                 h_target = encoder(x[i])
                 h_target = h_target[0]
                 z_t, _, _ = posterior(h_target)
                 prior(h)
-                if actions:
-                    frame_predictor(torch.cat([h, actions[i-1], z_t], 1))
+                if actions is not None:
+                    tiled_action = utils.tile_actions_into_image(actions[i-1], (h.shape[-2:]))
+                    frame_predictor(torch.cat([h, tiled_action, z_t], 1))
                 else:
                     frame_predictor(torch.cat([h, z_t], 1))
                 x_in = x[i]
                 gen_seq[s].append(x_in)
             else:
                 z_t, _, _ = prior(h)
-                if actions:
-                    h = frame_predictor(torch.cat([h, actions[i - 1], z_t], 1))
+                if actions is not None:
+                    tiled_action = utils.tile_actions_into_image(actions[i - 1], (h.shape[-2:]))
+                    h = frame_predictor(torch.cat([h, tiled_action, z_t], 1))
                 else:
                     h = frame_predictor(torch.cat([h, z_t], 1))
                 x_in = decoder([h, skip])
@@ -218,6 +263,7 @@ def plot(x, epoch, actions=None):
     to_plot = []
     gifs = [ [] for t in range(opt.n_eval) ]
     nrow = min(opt.batch_size, 10)
+    eval_mse = []
     for i in range(nrow):
         # ground truth sequence
         row = [] 
@@ -229,13 +275,15 @@ def plot(x, epoch, actions=None):
         min_mse = 1e7
         for s in range(nsample):
             mse = 0
+            sample_eval_mse = 0
             for t in range(opt.n_eval):
                 mse +=  torch.sum( (gt_seq[t][i].data.cpu() - gen_seq[s][t][i].data.cpu())**2 )
+                sample_eval_mse += reconstruction_criterion(gt_seq[t][i].data.cpu(), gen_seq[s][t][i].data.cpu())
             if mse < min_mse:
                 min_mse = mse
                 min_idx = s
-
-        s_list = [min_idx, 
+        eval_mse.append(sample_eval_mse / opt.n_eval)
+        s_list = [min_idx,
                   np.random.randint(nsample), 
                   np.random.randint(nsample), 
                   np.random.randint(nsample), 
@@ -253,13 +301,29 @@ def plot(x, epoch, actions=None):
                 s = s_list[ss]
                 row.append(gen_seq[s][t][i])
             gifs[t].append(row)
-
+    wandb.log({'eval/mse': np.mean(eval_mse)})
     fname = '%s/gen/sample_%d.png' % (opt.log_dir, epoch) 
     utils.save_tensors_image(fname, to_plot)
 
     fname = '%s/gen/sample_%d.gif' % (opt.log_dir, epoch) 
     utils.save_gif(fname, gifs)
+    log_wandb_gif(gifs, prefix="eval")
 
+
+def recursive_stack(list_of_tensors):
+    if torch.is_tensor(list_of_tensors):
+        return list_of_tensors
+    else:
+        return torch.stack([recursive_stack(t) for t in list_of_tensors], 0)
+
+def log_wandb_gif(gif, prefix):
+    # Convert list of list of list of tensors into one tensor
+    gif = recursive_stack(gif).detach().cpu()
+    # Take ground truth and a single random sample to log
+    gif = torch.cat((gif[:, :, 0], gif[:, :, -1]), dim=-1)
+    gif = torch.cat(torch.unbind(gif, dim=1), dim=-2)
+    gif = (gif.numpy() * 255).astype(np.uint8)
+    wandb.log({f"{prefix}/video": wandb.Video(gif)})
 
 def plot_rec(x, epoch, actions=None):
     frame_predictor.hidden = frame_predictor.init_hidden()
@@ -279,14 +343,16 @@ def plot_rec(x, epoch, actions=None):
         h_target = h_target
         z_t, _, _= posterior(h_target)
         if i < opt.n_past:
-            if actions:
-                frame_predictor(torch.cat([h, actions[i - 1], z_t], 1))
+            if actions is not None:
+                tiled_action = utils.tile_actions_into_image(actions[i - 1], (h.shape[-2:]))
+                frame_predictor(torch.cat([h, tiled_action, z_t], 1))
             else:
                 frame_predictor(torch.cat([h, z_t], 1))
             gen_seq.append(x[i])
         else:
-            if actions:
-                h_pred = frame_predictor(torch.cat([h, actions[i - 1], z_t], 1))
+            if actions is not None:
+                tiled_action = utils.tile_actions_into_image(actions[i - 1], (h.shape[-2:]))
+                h_pred = frame_predictor(torch.cat([h, tiled_action, z_t], 1))
             else:
                 h_pred = frame_predictor(torch.cat([h, z_t], 1))
             x_pred = decoder([h_pred, skip])
@@ -304,7 +370,7 @@ def plot_rec(x, epoch, actions=None):
 
 
 # --------- training funtions ------------------------------------
-def train(x, actions=None):
+def train(x, actions=None, log_gif=False):
     frame_predictor.zero_grad()
     posterior.zero_grad()
     prior.zero_grad()
@@ -318,6 +384,10 @@ def train(x, actions=None):
 
     mse = 0
     kld = 0
+
+    if log_gif:
+        final_gif = []
+
     for i in range(1, opt.n_past+opt.n_future):
         h = encoder(x[i-1])
         h_target = encoder(x[i])[0]
@@ -327,11 +397,14 @@ def train(x, actions=None):
             h = h[0]
         z_t, mu, logvar = posterior(h_target)
         _, mu_p, logvar_p = prior(h)
-        if actions:
-            h_pred = frame_predictor(torch.cat([h, actions[i-1], z_t], 1))
+        if actions is not None:
+            tiled_action = utils.tile_actions_into_image(actions[i - 1], (h.shape[-2:]))
+            h_pred = frame_predictor(torch.cat([h, tiled_action, z_t], 1))
         else:
             h_pred = frame_predictor(torch.cat([h, z_t], 1))
         x_pred = decoder([h_pred, skip])
+        if log_gif:
+            final_gif.append(x_pred)
         mse += reconstruction_criterion(x_pred, x[i])
         kld += kl_criterion(mu, logvar, mu_p, logvar_p)
 
@@ -342,6 +415,12 @@ def train(x, actions=None):
     prior_optimizer.step()
     encoder_optimizer.step()
     decoder_optimizer.step()
+
+    if log_gif:
+        final_gif = torch.stack(final_gif, dim=0).detach().cpu()
+        gif_to_log = torch.stack((x[1:].detach().cpu(), final_gif), axis=2)
+        gif_to_log = gif_to_log[:, :10] # Log at most 10 different batch items
+        log_wandb_gif(gif_to_log, prefix="train")
 
     return mse.data.cpu().numpy()/(opt.n_past+opt.n_future), kld.data.cpu().numpy()/(opt.n_future+opt.n_past)
 
@@ -355,6 +434,8 @@ if not opt.disable_wandb:
         mode="online",
         settings=wandb.Settings(start_method="fork"),
     )
+    wandb.run.name = opt.run_name
+    wandb.run.save()
 
 # --------- training loop ------------------------------------
 for epoch in range(opt.niter):
@@ -369,13 +450,12 @@ for epoch in range(opt.niter):
     for i in range(opt.epoch_size):
         progress.update(i+1)
         if opt.a_dim == 0:
-            x = next(training_batch_generator)
+            x = train_prep(next(training_batch_generator))
             actions = None
         else:
-            x, actions = next(training_batch_generator)
-
-        # train frame_predictor 
-        mse, kld = train(x, actions)
+            x, actions = train_prep(next(training_batch_generator))
+        # train frame_predictor
+        mse, kld = train(x, actions, log_gif=(i == opt.epoch_size-1))
         epoch_mse += mse
         epoch_kld += kld
         if not opt.disable_wandb:
@@ -395,11 +475,16 @@ for epoch in range(opt.niter):
     decoder.eval()
     posterior.eval()
     prior.eval()
-    
-    x = next(testing_batch_generator)
+
+    if opt.a_dim == 0:
+        x = test_prep(next(testing_batch_generator))
+        actions = None
+    else:
+        x, actions = test_prep(next(testing_batch_generator))
+
     with torch.no_grad():
-        plot(x, epoch)
-        plot_rec(x, epoch)
+        plot(x, epoch, actions=actions)
+        plot_rec(x, epoch, actions=actions)
 
     # save the model
     torch.save({

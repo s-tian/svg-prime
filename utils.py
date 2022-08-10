@@ -73,6 +73,8 @@ def sequence_input(seq, dtype):
     return [Variable(x.type(dtype)) for x in seq]
 
 def normalize_data(opt, dtype, sequence):
+    if opt.dataset == "perceptual_metrics":
+        return sequence
     if opt.dataset == 'smmnist' or opt.dataset == 'kth' or opt.dataset == 'bair' :
         sequence.transpose_(0, 1)
         sequence.transpose_(3, 4).transpose_(2, 3)
@@ -301,3 +303,9 @@ def init_weights(m):
         m.weight.data.normal_(1.0, 0.02)
         m.bias.data.fill_(0)
 
+def tile_actions_into_image(actions, image_shape):
+    # take tensor of shape [B, a_dim] and tile into shape [B, height, width, a_dim]
+    height, width = image_shape
+    actions = actions[..., None, None]
+    actions = actions.repeat(1, 1, height, width)
+    return actions
