@@ -4,10 +4,8 @@ import torch.nn as nn
 import argparse
 import os
 import random
-from torch.autograd import Variable
 from torch.utils.data import DataLoader
 import utils
-import itertools
 import progressbar
 import numpy as np
 
@@ -15,7 +13,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--lr', default=0.002, type=float, help='learning rate')
 parser.add_argument('--beta1', default=0.9, type=float, help='momentum term for adam')
 parser.add_argument('--batch_size', default=100, type=int, help='batch size')
-parser.add_argument('--log_dir', default='logs/fp', help='base directory to save logs')
+parser.add_argument('--log_dir', default='logs/lp', help='base directory to save logs')
 parser.add_argument('--model_dir', default='', help='base directory to save logs')
 parser.add_argument('--name', default='', help='identifier for directory')
 parser.add_argument('--data_root', default='data', help='root directory for data')
@@ -27,9 +25,10 @@ parser.add_argument('--image_width', type=int, default=64, help='the height / wi
 parser.add_argument('--channels', default=1, type=int)
 parser.add_argument('--dataset', default='smmnist', help='dataset to train with')
 parser.add_argument('--n_past', type=int, default=5, help='number of frames to condition on')
-parser.add_argument('--n_future', type=int, default=10, help='number of frames to predict')
-parser.add_argument('--n_eval', type=int, default=30, help='number of frames to predict at eval time')
+parser.add_argument('--n_future', type=int, default=10, help='number of frames to predict during training')
+parser.add_argument('--n_eval', type=int, default=30, help='number of frames to predict during eval')
 parser.add_argument('--rnn_size', type=int, default=256, help='dimensionality of hidden layer')
+parser.add_argument('--prior_rnn_layers', type=int, default=1, help='number of layers')
 parser.add_argument('--posterior_rnn_layers', type=int, default=1, help='number of layers')
 parser.add_argument('--predictor_rnn_layers', type=int, default=2, help='number of layers')
 parser.add_argument('--z_dim', type=int, default=10, help='dimensionality of z_t')
@@ -39,10 +38,13 @@ parser.add_argument('--model', default='dcgan', help='model type (dcgan | vgg)')
 parser.add_argument('--data_threads', type=int, default=5, help='number of data loading threads')
 parser.add_argument('--num_digits', type=int, default=2, help='number of digits for moving mnist')
 parser.add_argument('--last_frame_skip', action='store_true', help='if true, skip connections go between frame t and frame t+t rather than last ground truth frame')
+parser.add_argument('--wandb_project_name', type=str, default="svg-prime", help='project name to use when logging with wandb')
+parser.add_argument('--disable_wandb', action='store_true', help='do not log to wandb')
 
 
 opt = parser.parse_args()
 if opt.model_dir != '':
+    # load model and continue training from checkpoint
     saved_model = torch.load('%s/model.pth' % opt.model_dir)
     optimizer = opt.optimizer
     model_dir = opt.model_dir
@@ -51,7 +53,7 @@ if opt.model_dir != '':
     opt.model_dir = model_dir
     opt.log_dir = '%s/continued' % opt.log_dir
 else:
-    name = 'model=%s%dx%d-rnn_size=%d-predictor-posterior-rnn_layers=%d-%d-n_past=%d-n_future=%d-lr=%.4f-g_dim=%d-z_dim=%d-last_frame_skip=%d-beta=%.7f%s' % (opt.model, opt.image_width, opt.image_width, opt.rnn_size, opt.predictor_rnn_layers, opt.posterior_rnn_layers, opt.n_past, opt.n_future, opt.lr, opt.g_dim, opt.z_dim, opt.last_frame_skip, opt.beta, opt.name)
+    name = 'model=%s%dx%d-rnn_size=%d-predictor-posterior-prior-rnn_layers=%d-%d-%d-n_past=%d-n_future=%d-lr=%.4f-g_dim=%d-z_dim=%d-last_frame_skip=%s-beta=%.7f%s' % (opt.model, opt.image_width, opt.image_width, opt.rnn_size, opt.predictor_rnn_layers, opt.posterior_rnn_layers, opt.prior_rnn_layers, opt.n_past, opt.n_future, opt.lr, opt.g_dim, opt.z_dim, opt.last_frame_skip, opt.beta, opt.name)
     if opt.dataset == 'smmnist':
         opt.log_dir = '%s/%s-%d/%s' % (opt.log_dir, opt.dataset, opt.num_digits, name)
     else:
@@ -81,15 +83,19 @@ elif opt.optimizer == 'sgd':
 else:
     raise ValueError('Unknown optimizer: %s' % opt.optimizer)
 
+
 import models.lstm as lstm_models
 if opt.model_dir != '':
     frame_predictor = saved_model['frame_predictor']
     posterior = saved_model['posterior']
+    prior = saved_model['prior']
 else:
     frame_predictor = lstm_models.lstm(opt.g_dim+opt.z_dim, opt.g_dim, opt.rnn_size, opt.predictor_rnn_layers, opt.batch_size)
     posterior = lstm_models.gaussian_lstm(opt.g_dim, opt.z_dim, opt.rnn_size, opt.posterior_rnn_layers, opt.batch_size)
+    prior = lstm_models.gaussian_lstm(opt.g_dim, opt.z_dim, opt.rnn_size, opt.prior_rnn_layers, opt.batch_size)
     frame_predictor.apply(utils.init_weights)
     posterior.apply(utils.init_weights)
+    prior.apply(utils.init_weights)
 
 if opt.model == 'dcgan':
     if opt.image_width == 64:
@@ -103,7 +109,7 @@ elif opt.model == 'vgg':
         import models.vgg_128 as model
 else:
     raise ValueError('Unknown model: %s' % opt.model)
-        
+       
 if opt.model_dir != '':
     decoder = saved_model['decoder']
     encoder = saved_model['encoder']
@@ -115,21 +121,25 @@ else:
 
 frame_predictor_optimizer = opt.optimizer(frame_predictor.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
 posterior_optimizer = opt.optimizer(posterior.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+prior_optimizer = opt.optimizer(prior.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
 encoder_optimizer = opt.optimizer(encoder.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
 decoder_optimizer = opt.optimizer(decoder.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
 
 # --------- loss functions ------------------------------------
 mse_criterion = nn.MSELoss()
-def kl_criterion(mu, logvar):
-  # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-  KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-  KLD /= opt.batch_size  
-  return KLD
-
+def kl_criterion(mu1, logvar1, mu2, logvar2):
+    # KL( N(mu_1, sigma2_1) || N(mu_2, sigma2_2)) = 
+    #   log( sqrt(
+    # 
+    sigma1 = logvar1.mul(0.5).exp() 
+    sigma2 = logvar2.mul(0.5).exp() 
+    kld = torch.log(sigma2/sigma1) + (torch.exp(logvar1) + (mu1 - mu2)**2)/(2*torch.exp(logvar2)) - 1/2
+    return kld.sum() / opt.batch_size
 
 # --------- transfer to gpu ------------------------------------
 frame_predictor.cuda()
 posterior.cuda()
+prior.cuda()
 encoder.cuda()
 decoder.cuda()
 mse_criterion.cuda()
@@ -166,31 +176,35 @@ testing_batch_generator = get_testing_batch()
 
 # --------- plotting funtions ------------------------------------
 def plot(x, epoch):
-    nsample = 5 
+    nsample = 20 
     gen_seq = [[] for i in range(nsample)]
     gt_seq = [x[i] for i in range(len(x))]
 
-    h_seq = [encoder(x[i]) for i in range(opt.n_past)]
     for s in range(nsample):
         frame_predictor.hidden = frame_predictor.init_hidden()
+        posterior.hidden = posterior.init_hidden()
+        prior.hidden = prior.init_hidden()
         gen_seq[s].append(x[0])
         x_in = x[0]
         for i in range(1, opt.n_eval):
+            h = encoder(x_in)
             if opt.last_frame_skip or i < opt.n_past:	
-                h, skip = h_seq[i-1]
-                h = h.detach()
-            elif i < opt.n_past:
-                h, _ = h_seq[i-1]
-                h = h.detach()
+                h, skip = h
+            else:
+                h, _ = h
+            h = h
             if i < opt.n_past:
-                z_t, _, _ = posterior(h_seq[i][0])
-                frame_predictor(torch.cat([h, z_t], 1)) 
+                h_target = encoder(x[i])
+                h_target = h_target[0]
+                z_t, _, _ = posterior(h_target)
+                prior(h)
+                frame_predictor(torch.cat([h, z_t], 1))
                 x_in = x[i]
                 gen_seq[s].append(x_in)
             else:
-                z_t = torch.cuda.FloatTensor(opt.batch_size, opt.z_dim).normal_()
-                h = frame_predictor(torch.cat([h, z_t], 1)).detach()
-                x_in = decoder([h, skip]).detach()
+                z_t, _, _ = prior(h)
+                h = frame_predictor(torch.cat([h, z_t], 1))
+                x_in = decoder([h, skip])
                 gen_seq[s].append(x_in)
 
     to_plot = []
@@ -203,7 +217,23 @@ def plot(x, epoch):
             row.append(gt_seq[t][i])
         to_plot.append(row)
 
+        # best sequence
+        min_mse = 1e7
         for s in range(nsample):
+            mse = 0
+            for t in range(opt.n_eval):
+                mse +=  torch.sum( (gt_seq[t][i].data.cpu() - gen_seq[s][t][i].data.cpu())**2 )
+            if mse < min_mse:
+                min_mse = mse
+                min_idx = s
+
+        s_list = [min_idx, 
+                  np.random.randint(nsample), 
+                  np.random.randint(nsample), 
+                  np.random.randint(nsample), 
+                  np.random.randint(nsample)]
+        for ss in range(len(s_list)):
+            s = s_list[ss]
             row = []
             for t in range(opt.n_eval):
                 row.append(gen_seq[s][t][i]) 
@@ -211,7 +241,8 @@ def plot(x, epoch):
         for t in range(opt.n_eval):
             row = []
             row.append(gt_seq[t][i])
-            for s in range(nsample):
+            for ss in range(len(s_list)):
+                s = s_list[ss]
                 row.append(gen_seq[s][t][i])
             gifs[t].append(row)
 
@@ -228,21 +259,23 @@ def plot_rec(x, epoch):
     gen_seq = []
     gen_seq.append(x[0])
     x_in = x[0]
-    h_seq = [encoder(x[i]) for i in range(opt.n_past+opt.n_future)]
     for i in range(1, opt.n_past+opt.n_future):
-        h_target = h_seq[i][0].detach()
+        h = encoder(x[i-1])
+        h_target = encoder(x[i])
         if opt.last_frame_skip or i < opt.n_past:	
-            h, skip = h_seq[i-1]
+            h, skip = h
         else:
-            h, _ = h_seq[i-1]
-        h = h.detach()
-        z_t, mu, logvar = posterior(h_target)
+            h, _ = h
+        h_target, _ = h_target
+        h = h
+        h_target = h_target
+        z_t, _, _= posterior(h_target)
         if i < opt.n_past:
             frame_predictor(torch.cat([h, z_t], 1)) 
             gen_seq.append(x[i])
         else:
-            h_pred = frame_predictor(torch.cat([h, z_t], 1)).detach()
-            x_pred = decoder([h_pred, skip]).detach()
+            h_pred = frame_predictor(torch.cat([h, z_t], 1))
+            x_pred = decoder([h_pred, skip])
             gen_seq.append(x_pred)
    
     to_plot = []
@@ -260,42 +293,58 @@ def plot_rec(x, epoch):
 def train(x):
     frame_predictor.zero_grad()
     posterior.zero_grad()
+    prior.zero_grad()
     encoder.zero_grad()
     decoder.zero_grad()
 
     # initialize the hidden state.
     frame_predictor.hidden = frame_predictor.init_hidden()
     posterior.hidden = posterior.init_hidden()
+    prior.hidden = prior.init_hidden()
 
-    h_seq = [encoder(x[i]) for i in range(opt.n_past+opt.n_future)]
     mse = 0
     kld = 0
     for i in range(1, opt.n_past+opt.n_future):
-        h_target = h_seq[i][0]
+        h = encoder(x[i-1])
+        h_target = encoder(x[i])[0]
         if opt.last_frame_skip or i < opt.n_past:	
-            h, skip = h_seq[i-1]
+            h, skip = h
         else:
-            h = h_seq[i-1][0]
+            h = h[0]
         z_t, mu, logvar = posterior(h_target)
+        _, mu_p, logvar_p = prior(h)
         h_pred = frame_predictor(torch.cat([h, z_t], 1))
         x_pred = decoder([h_pred, skip])
         mse += mse_criterion(x_pred, x[i])
-        kld += kl_criterion(mu, logvar)
+        kld += kl_criterion(mu, logvar, mu_p, logvar_p)
 
     loss = mse + kld*opt.beta
     loss.backward()
 
     frame_predictor_optimizer.step()
     posterior_optimizer.step()
+    prior_optimizer.step()
     encoder_optimizer.step()
     decoder_optimizer.step()
 
+
     return mse.data.cpu().numpy()/(opt.n_past+opt.n_future), kld.data.cpu().numpy()/(opt.n_future+opt.n_past)
+
+# Initialize wandb
+if not opt.disable_wandb:
+    import wandb
+    wandb.init(
+        project=opt.wandb_project_name,
+        reinit=True,
+        mode="online",
+        settings=wandb.Settings(start_method="fork"),
+    )
 
 # --------- training loop ------------------------------------
 for epoch in range(opt.niter):
     frame_predictor.train()
     posterior.train()
+    prior.train()
     encoder.train()
     decoder.train()
     epoch_mse = 0
@@ -310,6 +359,11 @@ for epoch in range(opt.niter):
         epoch_mse += mse
         epoch_kld += kld
 
+        if not opt.disable_wandb:
+            wandb.log({
+                "train/mse": mse,
+                "train/kld": kld,
+            })
 
     progress.finish()
     utils.clear_progressbar()
@@ -321,9 +375,12 @@ for epoch in range(opt.niter):
     encoder.eval()
     decoder.eval()
     posterior.eval()
+    prior.eval()
+    
     x = next(testing_batch_generator)
-    plot(x, epoch)
-    plot_rec(x, epoch)
+    with torch.no_grad():
+        plot(x, epoch)
+        plot_rec(x, epoch)
 
     # save the model
     torch.save({
@@ -331,6 +388,7 @@ for epoch in range(opt.niter):
         'decoder': decoder,
         'frame_predictor': frame_predictor,
         'posterior': posterior,
+        'prior': prior,
         'opt': opt},
         '%s/model.pth' % opt.log_dir)
     if epoch % 10 == 0:

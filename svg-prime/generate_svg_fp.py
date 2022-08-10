@@ -1,16 +1,12 @@
 import torch
-import torch.optim as optim
-import torch.nn as nn
 import argparse
 import os
 import random
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 import utils
-import itertools
 import progressbar
 import numpy as np
-from scipy.ndimage.filters import gaussian_filter
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--batch_size', default=100, type=int, help='batch size')
@@ -44,17 +40,14 @@ dtype = torch.cuda.FloatTensor
 tmp = torch.load(opt.model_path)
 frame_predictor = tmp['frame_predictor']
 posterior = tmp['posterior']
-prior = tmp['prior']
 frame_predictor.eval()
-prior.eval()
 posterior.eval()
 encoder = tmp['encoder']
 decoder = tmp['decoder']
-encoder.train()
-decoder.train()
+encoder.eval()
+decoder.eval()
 frame_predictor.batch_size = opt.batch_size
 posterior.batch_size = opt.batch_size
-prior.batch_size = opt.batch_size
 opt.g_dim = tmp['opt'].g_dim
 opt.z_dim = tmp['opt'].z_dim
 opt.num_digits = tmp['opt'].num_digits
@@ -62,7 +55,6 @@ opt.num_digits = tmp['opt'].num_digits
 # --------- transfer to gpu ------------------------------------
 frame_predictor.cuda()
 posterior.cuda()
-prior.cuda()
 encoder.cuda()
 decoder.cuda()
 
@@ -144,7 +136,6 @@ def make_gifs(x, idx, name):
         gt_seq = []
         frame_predictor.hidden = frame_predictor.init_hidden()
         posterior.hidden = posterior.init_hidden()
-        prior.hidden = prior.init_hidden()
         x_in = x[0]
         all_gen.append([])
         all_gen[s].append(x_in)
@@ -157,13 +148,14 @@ def make_gifs(x, idx, name):
             h = h.detach()
             if i < opt.n_past:
                 h_target = encoder(x[i])[0].detach()
-                z_t, _, _ = posterior(h_target)
-                prior(h)
+                _, z_t, _ = posterior(h_target)
+            else:
+                z_t = torch.cuda.FloatTensor(opt.batch_size, opt.z_dim).normal_()
+            if i < opt.n_past:
                 frame_predictor(torch.cat([h, z_t], 1))
                 x_in = x[i]
                 all_gen[s].append(x_in)
             else:
-                z_t, _, _ = prior(h)
                 h = frame_predictor(torch.cat([h, z_t], 1)).detach()
                 x_in = decoder([h, skip]).detach()
                 gen_seq.append(x_in.data.cpu().numpy())

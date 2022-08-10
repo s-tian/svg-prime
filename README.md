@@ -4,6 +4,7 @@ It is built off of the code base for SVG-LP, described below.
 
 Notes:
 - The default learning rate of SVG-LP is very high (2e-3). For SVG', training performance is much better with a lower learning rate (tried 3e-4). 
+- Currently, action-conditioning is performed by tiling the action into an image of the same shape as the encoder output (such that the number of channels in the image is equal to the action dimension).
 
 # Stochastic Video Generation with a Learned Prior
 This is code for the paper [Stochastic Video Generation with a Learned Prior](https://arxiv.org/abs/1802.07687) by Emily Denton and Rob Fergus. See the [project page](https://sites.google.com/view/svglp/) for details and generated video sequences.

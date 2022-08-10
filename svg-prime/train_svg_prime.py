@@ -4,10 +4,8 @@ import torch.nn as nn
 import argparse
 import os
 import random
-from torch.autograd import Variable
 from torch.utils.data import DataLoader
 import utils
-import itertools
 import progressbar
 import numpy as np
 
@@ -244,7 +242,7 @@ def plot(x, epoch, actions=None):
                 z_t, _, _ = posterior(h_target)
                 prior(h)
                 if actions is not None:
-                    tiled_action = utils.tile_actions_into_image(actions[i-1], (h.shape[-2:]))
+                    tiled_action = utils.tile_actions_into_image(actions[i - 1], (h.shape[-2:]))
                     frame_predictor(torch.cat([h, tiled_action, z_t], 1))
                 else:
                     frame_predictor(torch.cat([h, z_t], 1))
