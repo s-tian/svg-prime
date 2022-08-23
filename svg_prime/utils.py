@@ -297,6 +297,9 @@ def init_weights(m):
         m.weight.data.normal_(1.0, 0.02)
         m.bias.data.fill_(0)
 
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
 def tile_actions_into_image(actions, image_shape):
     # take tensor of shape [B, a_dim] and tile into shape [B, height, width, a_dim]
     height, width = image_shape
