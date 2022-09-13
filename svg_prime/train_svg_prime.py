@@ -14,6 +14,7 @@ parser.add_argument('--lr', default=0.0003, type=float, help='learning rate')
 parser.add_argument('--beta1', default=0.9, type=float, help='momentum term for adam')
 parser.add_argument('--batch_size', default=100, type=int, help='batch size')
 parser.add_argument('--log_dir', default='logs/lp', help='base directory to save logs')
+parser.add_argument('--log_every', default=3, type=int, help='how often to log model checkpoints')
 parser.add_argument('--model_dir', default='', help='base directory to save logs')
 parser.add_argument('--name', default='', help='identifier for directory')
 parser.add_argument('--data_root', default='data', help='root directory for data')
@@ -42,13 +43,13 @@ parser.add_argument('--g_dim', type=int, default=128, help='dimensionality of en
 parser.add_argument('--a_dim', type=int, default=4, help='dimensionality of action vector')
 parser.add_argument('--beta', type=float, default=0.0001, help='weighting on KL to prior')
 parser.add_argument('--lpips_weight', type=float, default=0, help='weight on LPIPS loss')
+parser.add_argument('--rgb_weight', type=float, default=1.0, help='weight on rgb loss')
 parser.add_argument('--model', default='shallow_vgg', help='model type (dcgan | vgg | shallow_vgg)')
 parser.add_argument('--data_threads', type=int, default=5, help='number of data loading threads')
 parser.add_argument('--num_digits', type=int, default=2, help='number of digits for moving mnist')
 parser.add_argument('--last_frame_skip', action='store_true', help='if true, skip connections go between frame t and frame t+t rather than last ground truth frame')
 parser.add_argument('--wandb_project_name', type=str, default="svg_prime", help='project name to use when logging with wandb')
 parser.add_argument('--disable_wandb', action='store_true', help='do not log to wandb')
-
 
 
 opt = parser.parse_args()
@@ -403,9 +404,11 @@ def train(x, actions=None, log_gif=False):
         x_pred = decoder([h_pred, skip])
         if log_gif:
             final_gif.append(x_pred)
-        mse += reconstruction_criterion(x_pred, x[i])
+        mse += opt.rgb_weight * reconstruction_criterion(x_pred, x[i])
         if opt.lpips_weight > 0:
             lpips += lpips_loss(x_pred, x[i])
+        else:
+            lpips = torch.tensor(0)
         kld += kl_criterion(mu, logvar, mu_p, logvar_p)
 
     loss = mse + kld*opt.beta + lpips*opt.lpips_weight
@@ -494,15 +497,21 @@ for epoch in range(opt.niter):
         plot_rec(x, epoch, actions=actions)
 
     # save the model
-    torch.save({
-        'encoder': encoder,
-        'decoder': decoder,
-        'frame_predictor': frame_predictor,
-        'posterior': posterior,
-        'prior': prior,
-        'opt': opt,
-        'optimizer': optimizer.state_dict()},
-        '%s/model.pth' % opt.log_dir)
+    if epoch % opt.log_every == 0:
+        torch.save({
+            'encoder': encoder,
+            'decoder': decoder,
+            'frame_predictor': frame_predictor,
+            'posterior': posterior,
+            'prior': prior,
+            'opt': opt,
+            'encoder_optimizer': encoder_optimizer.state_dict(),
+            'decoder_optimizer': decoder_optimizer.state_dict(),
+            'frame_predictor_optimizer': frame_predictor_optimizer.state_dict(),
+            'posterior_optimizer': posterior_optimizer.state_dict(),
+            'prior_optimizer': prior_optimizer.state_dict(),
+        },
+            f'{opt.log_dir}/model_{epoch}.pth')
     if epoch % 10 == 0:
         print('log dir: %s' % opt.log_dir)
         
