@@ -20,22 +20,22 @@ class encoder(nn.Module):
         self.dim = dim
         # 64 x 64
         self.c1 = nn.Sequential(
-                VGG_layer(nc, 64*expand),
-                VGG_layer(64*expand, 64*expand),
+                VGG_layer(nc, int(64*expand)),
+                VGG_layer(int(64*expand), int(64*expand)),
                 )
         # 32 x 32
         self.c2 = nn.Sequential(
-                VGG_layer(64*expand, 128*expand),
-                VGG_layer(128*expand, 128*expand),
+                VGG_layer(int(64*expand), int(128*expand)),
+                VGG_layer(int(128*expand), int(128*expand)),
                 )
         # 16 x 16
         self.c3 = nn.Sequential(
-                VGG_layer(128*expand, 256*expand),
-                VGG_layer(256*expand, 256*expand),
-                VGG_layer(256*expand, 256*expand),
+                VGG_layer(int(128*expand), int(256*expand)),
+                VGG_layer(int(256*expand), int(256*expand)),
+                VGG_layer(int(256*expand), int(256*expand)),
                 )
 
-        self.c4 = nn.Conv2d(256*expand, 128, 3, 1, 1) # One conv layer with 128 outputs
+        self.c4 = nn.Conv2d(int(256*expand), 128, 3, 1, 1) # One conv layer with 128 outputs
         self.mp = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
 
     def forward(self, input):
@@ -52,22 +52,22 @@ class decoder(nn.Module):
         self.dim = dim
         # 16 x 16
 
-        self.upc1 = nn.Conv2d(128, 256*expand, 3, 1, 1) # One conv layer with 128 outputs
+        self.upc1 = nn.Conv2d(128, int(256*expand), 3, 1, 1) # One conv layer with 128 outputs
 
         self.upc2 = nn.Sequential(
-                VGG_layer(256*2*expand, 256*expand),
-                VGG_layer(256*expand, 256*expand),
-                VGG_layer(256*expand, 128*expand)
+                VGG_layer(int(256*2*expand), int(256*expand)),
+                VGG_layer(int(256*expand), int(256*expand)),
+                VGG_layer(int(256*expand), int(128*expand))
                 )
         # 32 x 32
         self.upc3 = nn.Sequential(
-                VGG_layer(128*2*expand, 128*expand),
-                VGG_layer(128*expand, 64*expand)
+                VGG_layer(int(128*2*expand), int(128*expand)),
+                VGG_layer(int(128*expand), int(64*expand))
                 )
         # 64 x 64
         self.upc4 = nn.Sequential(
-                VGG_layer(64*2*expand, 64*expand),
-                nn.ConvTranspose2d(64*expand, nc, 3, 1, 1),
+                VGG_layer(int(64*2*expand), int(64*expand)),
+                nn.ConvTranspose2d(int(64*expand), nc, 3, 1, 1),
                 nn.Sigmoid()
                 )
 
