@@ -454,7 +454,8 @@ for epoch in range(opt.niter):
     epoch_mse = 0
     epoch_kld = 0
     epoch_lpips = 0
-    progress = progressbar.ProgressBar(max_value=opt.epoch_size).start()
+    progress = progressbar.ProgressBar(maxval=opt.epoch_size).start()
+    progressbar.ProgressBar()
     for i in range(opt.epoch_size):
         progress.update(i+1)
         if opt.a_dim == 0:
